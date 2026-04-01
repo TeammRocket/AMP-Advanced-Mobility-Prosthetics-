@@ -3,50 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AMP</title>
+    <title>AMP Controller</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background: #121212; color: #e0e0e0; display: flex; height: 100vh; }
-        /* Side menu */
         .sidebar { width: 250px; background: #1e1e1e; border-right: 1px solid #333; display: flex; flex-direction: column; }
         .logo { padding: 20px; font-size: 24px; font-weight: bold; border-bottom: 1px solid #333; color: #bb86fc; letter-spacing: 2px;}
         .menu-item { padding: 15px 20px; cursor: pointer; transition: 0.2s; border-left: 4px solid transparent; }
         .menu-item:hover { background: #2a2a2a; }
         .menu-item.active { background: #2a2a2a; border-left: 4px solid #bb86fc; color: #fff; }
-        /* Main content */
         .content { flex-grow: 1; padding: 30px; display: flex; flex-direction: column; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
-        /* EMG Graphic */
         canvas { background: #1e1e1e; border: 1px solid #333; border-radius: 8px; width: 100%; height: 400px; }
         .status-bar { margin-top: 15px; font-size: 18px; color: #03dac6; }
-        /* Settings */
         .setting-group { margin-bottom: 25px; background: #1e1e1e; padding: 20px; border-radius: 8px; border: 1px solid #333;}
         .setting-group label { display: block; margin-bottom: 10px; font-size: 16px; }
         input[type=range] { width: 100%; accent-color: #bb86fc; }
         .val-display { float: right; color: #bb86fc; font-weight: bold; }
-        .btn { background: #bb86fc; color: #000; border: none; padding: 12px 20px; font-size: 16px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; transition: 0.2s; }
+        .btn { background: #bb86fc; color: #000; border: none; padding: 12px 20px; font-size: 16px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; transition: 0.2s; margin-bottom: 10px; }
         .btn:hover { background: #9d4edd; }
         .btn:active { transform: scale(0.98); }
+        .btn-test { background: #333; color: #fff; border: 1px solid #03dac6; }
+        .btn-test.active { background: #03dac6; color: #000; }
     </style>
 </head>
 <body>
 
     <div class="sidebar">
-        <div class="logo">AMP</div>
+        <div class="logo">A.M.P</div>
         <div class="menu-item active" onclick="switchTab('graphic')">Graphic</div>
         <div class="menu-item" onclick="switchTab('settings')">Settings</div>
     </div>
 
     <div class="content">
         <div id="graphic" class="tab-content active">
-            <h2>Live EMG Signal</h2>
+            <h2 id="modeTitle">Live EMG Signal</h2>
             <canvas id="emgChart"></canvas>
-            <div class="status-bar">Signal Value: <span id="currentVal">0</span> | Motor: <span id="motorState" style="color:#cf6679;">REST</span></div>
+            <div class="status-bar">Signal: <span id="currentVal">0</span> | Motor: <span id="motorState" style="color:#cf6679;">REST</span></div>
         </div>
 
         <div id="settings" class="tab-content">
             <h2>Prosthesis Settings</h2>
             
+            <div class="setting-group">
+                <button id="testBtn" class="btn btn-test" onclick="toggleTestMode()">TEST MODE: OFF</button>
+                <p style="color: #aaa; font-size: 12px; margin-top: 5px;">Simulates muscle movement and sends data to the second ESP32 via ESP-NOW.</p>
+            </div>
+
             <div class="setting-group">
                 <label>Gain (Multiplier) <span id="gainVal" class="val-display">1.0</span></label>
                 <input type="range" id="gain" min="0.1" max="5.0" step="0.1" value="1.0" oninput="updateSettings()">
@@ -58,14 +61,12 @@
             </div>
 
             <div class="setting-group">
-                <p style="color: #aaa; font-size: 14px; margin-top:0;">Sit down, relax your leg completely, and press the button. The system will measure your resting noise for 3 seconds.</p>
                 <button class="btn" onclick="calibrate()">Run Calibration</button>
             </div>
         </div>
     </div>
 
     <script>
-        // logic for tab switching
         function switchTab(tabId) {
             document.querySelectorAll('.menu-item').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -73,21 +74,17 @@
             document.getElementById(tabId).classList.add('active');
         }
 
-        // WebSocket logic
         var gateway = `ws://${window.location.hostname}/ws`;
         var websocket;
+        var isTestMode = false;
         
         function initWebSocket() {
-            console.log('Trying to open a WebSocket connection...');
             websocket = new WebSocket(gateway);
-            websocket.onopen = onOpen;
-            websocket.onclose = onClose;
+            websocket.onopen = () => console.log('Connected');
+            websocket.onclose = () => setTimeout(initWebSocket, 2000);
             websocket.onmessage = onMessage;
         }
 
-        function onOpen(event) { console.log('Connection opened'); }
-        function onClose(event) { console.log('Connection closed'); setTimeout(initWebSocket, 2000); }
-        
         function onMessage(event) {
             var data = JSON.parse(event.data);
             if(data.type === "data") {
@@ -105,76 +102,63 @@
             var t = document.getElementById('threshold').value;
             document.getElementById('gainVal').innerText = g;
             document.getElementById('threshVal').innerText = t;
-            
-            var msg = { command: "settings", gain: parseFloat(g), threshold: parseInt(t) };
-            websocket.send(JSON.stringify(msg));
+            websocket.send(JSON.stringify({ command: "settings", gain: parseFloat(g), threshold: parseInt(t) }));
         }
 
         function calibrate() {
-            var msg = { command: "calibrate" };
-            websocket.send(JSON.stringify(msg));
+            websocket.send(JSON.stringify({ command: "calibrate" }));
             alert("Calibration started... Please keep your leg relaxed for 3 seconds.");
         }
 
-        window.addEventListener('load', onLoad);
-        function onLoad(event) { initWebSocket(); initGraph(); }
+        function toggleTestMode() {
+            isTestMode = !isTestMode;
+            var btn = document.getElementById('testBtn');
+            var title = document.getElementById('modeTitle');
+            if(isTestMode) {
+                btn.innerText = "TEST MODE: ON";
+                btn.classList.add('active');
+                title.innerText = "Simulation Mode (Sending to ESP-NOW)";
+                title.style.color = "#03dac6";
+            } else {
+                btn.innerText = "TEST MODE: OFF";
+                btn.classList.remove('active');
+                title.innerText = "Live EMG Signal";
+                title.style.color = "#e0e0e0";
+            }
+            websocket.send(JSON.stringify({ command: "test_mode", state: isTestMode }));
+        }
 
-        // logic for drawing the graph (Canvas)
+        window.addEventListener('load', () => { initWebSocket(); initGraph(); });
+
         const canvas = document.getElementById('emgChart');
         const ctx = canvas.getContext('2d');
         let dataPoints = new Array(100).fill(0);
         let currentThreshold = 200;
 
-        function initGraph() {
-            canvas.width = canvas.parentElement.clientWidth;
-            canvas.height = 400;
-            drawGraph();
-        }
-
-        function addData(val, thresh) {
-            dataPoints.push(val);
-            dataPoints.shift(); // Delete the oldest point to keep the array size constant
-            currentThreshold = thresh;
-            drawGraph();
-        }
+        function initGraph() { canvas.width = canvas.parentElement.clientWidth; canvas.height = 400; drawGraph(); }
+        function addData(val, thresh) { dataPoints.push(val); dataPoints.shift(); currentThreshold = thresh; drawGraph(); }
 
         function drawGraph() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            // draw grid lines
-            ctx.strokeStyle = '#333';
-            ctx.beginPath();
-            for(let i=0; i<5; i++) {
-                let y = (canvas.height / 4) * i;
-                ctx.moveTo(0, y); ctx.lineTo(canvas.width, y);
-            }
+            ctx.strokeStyle = '#333'; ctx.beginPath();
+            for(let i=0; i<5; i++) { let y = (canvas.height / 4) * i; ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); }
             ctx.stroke();
 
-            // draw threshold line (red)
-            let maxGraphVal = 2000; // Maximum value on the graph
+            let maxGraphVal = 2000;
             let threshY = canvas.height - (currentThreshold / maxGraphVal) * canvas.height;
-            ctx.strokeStyle = 'rgba(207, 102, 121, 0.5)';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([5, 5]);
-            ctx.beginPath();
-            ctx.moveTo(0, threshY);
-            ctx.lineTo(canvas.width, threshY);
-            ctx.stroke();
-            ctx.setLineDash([]); // reset dash pattern
+            ctx.strokeStyle = 'rgba(207, 102, 121, 0.5)'; ctx.lineWidth = 2; ctx.setLineDash([5, 5]);
+            ctx.beginPath(); ctx.moveTo(0, threshY); ctx.lineTo(canvas.width, threshY); ctx.stroke();
+            ctx.setLineDash([]);
 
-            // draw EMG signal
-            ctx.strokeStyle = '#03dac6';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
+            ctx.strokeStyle = isTestMode ? '#bb86fc' : '#03dac6'; // graph color changed in test mode
+            ctx.lineWidth = 3; ctx.beginPath();
             for (let i = 0; i < dataPoints.length; i++) {
                 let x = (i / (dataPoints.length - 1)) * canvas.width;
                 let y = canvas.height - (dataPoints[i] / maxGraphVal) * canvas.height;
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             }
             ctx.stroke();
         }
-        
         window.onresize = () => { canvas.width = canvas.parentElement.clientWidth; drawGraph(); };
     </script>
 </body>
