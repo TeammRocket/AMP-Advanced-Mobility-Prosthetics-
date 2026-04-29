@@ -3,7 +3,7 @@
 #include <esp_now.h>
 #include <ESP32Servo.h>
 
-const int PIN_SERVO = 32;
+const int PIN_SERVO = 2;
 
 Servo receiverServo;
 
