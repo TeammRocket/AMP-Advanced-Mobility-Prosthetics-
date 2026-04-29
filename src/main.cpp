@@ -1,199 +1,87 @@
 #include <Arduino.h>
-#include <WiFi.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <LittleFS.h>
-#include <ESP32Servo.h>
-#include <esp_now.h>
 
-// ESP32-S3 Pins
-const int PIN_EMG = 4;    
-const int PIN_SERVO = 2;
+// --- PIN CONFIGURATION ---
+// Replace with your actual ESP32-S3 pins
+const int EMG_QUADRO_PIN = 4;
+const int EMG_TWOHEAD_PIN = 5;
 
-// Working Variables
-Servo myServo;
-int baseline = 0;
-float gain = 1.0;
-int threshold = 200;
-float smoothedSignal = 0;
-const float alpha = 0.2;
+// --- THRESHOLD VALUES ---
+// The signal must exceed this value for the muscle to be considered active
+const int THRESHOLD_QUADRO = 1500;
+const int THRESHOLD_TWOHEAD = 1500;
 
-bool isTestMode = false;
-unsigned long simStartTime = 0;
+// --- GLOBAL VARIABLES FOR WEB INTERFACE ---
+int quadroValue = 0;
+int twoheadValue = 0;
+bool quadro = false;
+bool twohead = false;
+int currentLegPosition = 90; // Virtual position (0: fully bent, 180: fully extended)
 
-bool isCalibrating = false;
-unsigned long calibStartTime = 0;
-long calibSum = 0;
-int calibCount = 0;
+// --- NON-BLOCKING TIMER VARIABLES ---
+unsigned long previousMillis = 0;
+const long updateInterval = 15; // Speed of movement in milliseconds (lower is faster)
 
-// Server and WebSockets
-AsyncWebServer server(80);
-AsyncWebSocket ws("/ws");
-unsigned long lastSendTime = 0;
+// Змінні для контролю виводу в Serial Monitor
+unsigned long previousSerialMillis = 0;
+const long serialInterval = 500; // Виводити дані кожні 500 мілісекунд (2 рази на секунду)
 
-uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-
-typedef struct struct_message {
-  int angle;
-  bool isActive;
-} struct_message;
-
-struct_message myData;
-esp_now_peer_info_t peerInfo;
-
-// Function from wifi_setup.cpp
-void connectWiFi();
-
-// Handle Web Commands
-void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
-  AwsFrameInfo *info = (AwsFrameInfo*)arg;
-  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
-    data[len] = 0;
-    String msg = (char*)data;
-    
-    if (msg.indexOf("\"command\":\"calibrate\"") > 0) {
-      isCalibrating = true;
-      calibStartTime = millis();
-      calibSum = 0;
-      calibCount = 0;
-    } 
-    else if (msg.indexOf("\"command\":\"test_mode\"") > 0) {
-      isTestMode = msg.indexOf("\"state\":true") > 0;
-      simStartTime = millis();
-    }
-    else if (msg.indexOf("\"command\":\"settings\"") > 0) {
-      int gIdx = msg.indexOf("\"gain\":") + 7;
-      int gEnd = msg.indexOf(",", gIdx);
-      gain = msg.substring(gIdx, gEnd).toFloat();
-      
-      int tIdx = msg.indexOf("\"threshold\":") + 12;
-      int tEnd = msg.indexOf("}", tIdx);
-      threshold = msg.substring(tIdx, tEnd).toInt();
-    }
-  }
-}
-
-void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
-  if (type == WS_EVT_DATA) {
-    handleWebSocketMessage(arg, data, len);
-  }
-}
-
+// --- SETUP FUNCTION (Runs once at startup) ---
 void setup() {
+  // Initialize serial communication at 115200 baud rate
   Serial.begin(115200);
-  delay(4000);
-  pinMode(PIN_EMG, INPUT);
-  
-  // Configure Servo for S3
-  ESP32PWM::allocateTimer(0);
-  ESP32PWM::allocateTimer(1);
-  ESP32PWM::allocateTimer(2);
-  ESP32PWM::allocateTimer(3);
-  myServo.setPeriodHertz(50);
-  myServo.attach(PIN_SERVO, 500, 2400);
-  myServo.write(0);
-
-  // 1. File System
-  if(!LittleFS.begin(true)){
-    Serial.println("File System Error?");
-    return;
-  }
-
-  // 2. Wi-Fi Manager
-  connectWiFi();
-
-  if (WiFi.status() == WL_CONNECTED) {    
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println(WiFi.softAPIP());
-  }
-
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("ESP-NOW Error");
-    return;
-  }
-  
-  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-  peerInfo.channel = 0;
-  peerInfo.encrypt = false;
-  if (esp_now_add_peer(&peerInfo) != ESP_OK){
-    Serial.println("Failed to add ESP-NOW peer");
-    return;
-  }
-  Serial.println("ESP-NOW Ready (Broadcast Mode)");
-
-  // 3. Web Server
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(LittleFS, "/index.html", "text/html");
-  });
-
-  ws.onEvent(onEvent);
-  server.addHandler(&ws);
-  server.begin();
-  Serial.println("Server running");
 }
 
-void loop() {
-  ws.cleanupClients(); 
+// --- SENSOR DATA PROCESSING ---
+void processEMG() {
+  // Read analog values from sensors
+  quadroValue = analogRead(EMG_QUADRO_PIN);
+  twoheadValue = analogRead(EMG_TWOHEAD_PIN);
 
-  // calibration process
-  if (isCalibrating) {
-    if (millis() - calibStartTime < 3000) { 
-      calibSum += analogRead(PIN_EMG);
-      calibCount++;
-      delay(5);
-    } else {
-      // Правка: Захист від ділення на нуль
-      if (calibCount > 0) {
-        baseline = calibSum / calibCount;
+  // Determine muscle state based on thresholds
+  quadro = (quadroValue > THRESHOLD_QUADRO);
+  twohead = (twoheadValue > THRESHOLD_TWOHEAD);
+}
+
+// --- SMOOTH POSITION CALCULATION ---
+void calculateSmoothPosition() {
+  unsigned long currentMillis = millis();
+
+  // Update position only if the specified interval has passed
+  if (currentMillis - previousMillis >= updateInterval) {
+    previousMillis = currentMillis;
+
+    // --- MAIN CONTROL LOGIC ---
+    if (quadro == true && twohead == false) {
+      // Extension: smoothly increase the angle
+      if (currentLegPosition < 180) {
+        currentLegPosition++;
       }
-      isCalibrating = false;
-      
-      String calibMsg = "{\"type\":\"calib_done\", \"baseline\":" + String(baseline) + "}";
-      ws.textAll(calibMsg);
+    } 
+    else if (quadro == false && twohead == true) {
+      // Flexion: smoothly decrease the angle
+      if (currentLegPosition > 0) {
+        currentLegPosition--;
+      }
     }
-    return;
+    // If both are true or both are false, the position remains unchanged.
+  }
+}
+
+// --- MAIN LOOP (Runs continuously) ---
+void loop() {
+  // 1. Update sensor data
+  processEMG();
+
+  // 2. Calculate new smooth position
+  calculateSmoothPosition();
+
+  // 3. Debug output to Serial Monitor (сповільнений вивід)
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousSerialMillis >= serialInterval) {
+    previousSerialMillis = currentMillis;
+    Serial.printf("Q_Val: %d | T_Val: %d | Q_Bool: %d | T_Bool: %d | Pos: %d\n", quadroValue, twoheadValue, quadro, twohead, currentLegPosition);
   }
 
-  int finalSignal = 0;
-
-  if (isTestMode) {
-    float timeSec = (millis() - simStartTime) / 1000.0;
-    float wave = (sin(timeSec * 2.0) + 1.0) / 2.0; 
-    finalSignal = (int)(wave * 1500); 
-  } else {
-    // EMG signal processing
-    int rawValue = analogRead(PIN_EMG);
-    int noiseRemoved = abs(rawValue - baseline);
-    smoothedSignal = (alpha * noiseRemoved) + ((1.0 - alpha) * smoothedSignal);
-    finalSignal = (int)(smoothedSignal * gain);
-  }
-
-  // Control Servo
-  bool isExtending = false;
-  int targetAngle = 0;
-  
-  if (finalSignal > threshold) {
-    targetAngle = 120;
-    isExtending = true;
-  } else {
-    targetAngle = 0;
-  }
-  
-  myServo.write(targetAngle);
-
-  // --- SEND TO GRAPH (website) ---
-  if (millis() - lastSendTime > 50) {
-    
-    String json = "{\"type\":\"data\",\"emg\":" + String(finalSignal) + 
-                  ",\"threshold\":" + String(threshold) + 
-                  ",\"active\":" + String(isExtending ? "true" : "false") + "}";
-    ws.textAll(json);
-
-    myData.angle = targetAngle;
-    myData.isActive = isExtending;
-    esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
-
-    lastSendTime = millis();
-  }
+  // 4. Critical tiny delay to allow ESP32 background tasks (like USB Serial) to process
+  delay(10);
 }
