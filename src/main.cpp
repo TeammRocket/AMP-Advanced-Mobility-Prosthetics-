@@ -1,7 +1,6 @@
 #include <Arduino.h>
 
 // --- PIN CONFIGURATION ---
-// Replace with your actual ESP32-S3 pins
 const int EMG_QUADRO_PIN = 4;
 const int EMG_TWOHEAD_PIN = 5;
 
@@ -79,7 +78,21 @@ void loop() {
   unsigned long currentMillis = millis();
   if (currentMillis - previousSerialMillis >= serialInterval) {
     previousSerialMillis = currentMillis;
-    Serial.printf("Q_Val: %d | T_Val: %d | Q_Bool: %d | T_Bool: %d | Pos: %d\n", quadroValue, twoheadValue, quadro, twohead, currentLegPosition);
+    
+    // Determine the text state of the leg
+    String legState = "REST (Fixed)";
+    if (quadro == true && twohead == false) {
+      legState = "EXTENSION ->";
+    } else if (quadro == false && twohead == true) {
+     legState = "<- FLEXION";
+    }
+
+    // Print clear and readable text to the console
+    Serial.printf("Quadro: %s | Twohead: %s | Angle: %d | State: %s\n", 
+                  quadro ? "TRUE" : "FALSE", 
+                  twohead ? "TRUE" : "FALSE", 
+                  currentLegPosition, 
+                  legState.c_str());
   }
 
   // 4. Critical tiny delay to allow ESP32 background tasks (like USB Serial) to process
