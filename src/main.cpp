@@ -2,12 +2,15 @@
 #include <WebServer.h>
 #include <ESP32Servo.h>
 
-const char* ssid = "ssid";
-const char* password = "pswd";
+const char* ssid = "DLS";
+const char* password = "future2809";
 const int servoPin = 2;
 
 WebServer server(80);
 Servo myServo;
+
+unsigned long detachTime = 0;
+bool isServoMoving = false;
 
 const char htmlPage[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -17,20 +20,25 @@ const char htmlPage[] PROGMEM = R"rawliteral(
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta charset="utf-8">
     <style>
-        body { font-family: sans-serif; text-align: center; margin-top: 50px; background-color: #f4f4f9; }
-        input[type=range] { width: 80%; max-width: 400px; height: 25px; }
-        h1 { color: #333; }
-        .angle-display { font-size: 24px; font-weight: bold; color: #0066cc; }
+        body { font-family: sans-serif; text-align: center; margin-top: 20px; background-color: #f4f4f9; }
+        .section { margin: 20px auto; padding: 20px; width: 90%; max-width: 400px; background: #fff; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        input[type=number] { width: 100px; padding: 10px; font-size: 18px; margin: 10px; text-align: center; }
+        button { font-size: 18px; padding: 15px 20px; margin: 10px; border: none; border-radius: 5px; cursor: pointer; color: white; width: 80%; background-color: #4CAF50; transition: 0.2s; }
+        button:active { transform: scale(0.95); }
+        h1, h2 { color: #333; }
     </style>
 </head>
 <body>
-    <h1>Servo control</h1>
-    <p>Angle: <span class="angle-display" id="angle_val">90</span>&deg;</p>
-    <input type="range" min="0" max="180" value="90" id="servoSlider" oninput="updateServo(this.value)">
+    <h1>Servo Control</h1>
+    
+    <div class="section">
+        <h2>Set Target Angle</h2>
+        <input type="number" id="targetAngle" min="0" max="180" value="90"><br>
+        <button onclick="sendAction(document.getElementById('targetAngle').value)">Set Angle</button>
+    </div>
     
     <script>
-        function updateServo(val) {
-            document.getElementById("angle_val").innerText = val;
+        function sendAction(val) {
             fetch('/set?angle=' + val); 
         }
     </script>
@@ -45,9 +53,13 @@ void handleRoot() {
 void handleSet() {
   if (server.hasArg("angle")) {
     int angle = server.arg("angle").toInt();
-    
     if (angle >= 0 && angle <= 180) {
       myServo.write(angle);
+      if (!myServo.attached()) {
+        myServo.attach(servoPin, 500, 2400);
+      }
+      detachTime = millis() + 1000;
+      isServoMoving = true;
     }
     server.send(200, "text/plain", "OK");
   } else {
@@ -59,33 +71,24 @@ void setup() {
   Serial.begin(115200);
   
   myServo.setPeriodHertz(50); 
-  myServo.attach(servoPin, 500, 2400); 
-  myServo.write(90);
 
-  Serial.println();
-  Serial.print("connecting to ");
-  Serial.println(ssid);
-  
   WiFi.begin(ssid, password);
   
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
   }
   
-  Serial.println("");
-  Serial.println("Wi-Fi connected");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
-
   server.on("/", handleRoot);
   server.on("/set", handleSet);
 
   server.begin();
-  Serial.println("server started");
 }
 
 void loop() {
-
   server.handleClient();
+
+  if (isServoMoving && millis() >= detachTime) {
+    myServo.detach();
+    isServoMoving = false;
+  }
 }
