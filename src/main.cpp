@@ -1,8 +1,11 @@
 #include <Arduino.h>
+#include <ESP32Servo.h>
 
 // --- PIN CONFIGURATION ---
+// Replace with your actual ESP32-S3 pins
 const int EMG_QUADRO_PIN = 4;
 const int EMG_TWOHEAD_PIN = 5;
+const int SERVO_PIN = 1;
 
 // --- THRESHOLD VALUES ---
 // The signal must exceed this value for the muscle to be considered active
@@ -14,20 +17,26 @@ int quadroValue = 0;
 int twoheadValue = 0;
 bool quadro = false;
 bool twohead = false;
-int currentLegPosition = 90; // Virtual position (0: fully bent, 180: fully extended)
+int currentLegPosition = 90; // Initial angle (0: fully bent, 180: fully extended)
+
+// --- SERVO OBJECT ---
+Servo legServo;
 
 // --- NON-BLOCKING TIMER VARIABLES ---
 unsigned long previousMillis = 0;
 const long updateInterval = 15; // Speed of movement in milliseconds (lower is faster)
 
-// Змінні для контролю виводу в Serial Monitor
+// Variables for controlling Serial Monitor output speed
 unsigned long previousSerialMillis = 0;
-const long serialInterval = 500; // Виводити дані кожні 500 мілісекунд (2 рази на секунду)
+const long serialInterval = 500; // Output data every 500 milliseconds
 
 // --- SETUP FUNCTION (Runs once at startup) ---
 void setup() {
-  // Initialize serial communication at 115200 baud rate
   Serial.begin(115200);
+
+  // Initialize the servo motor
+  legServo.attach(SERVO_PIN);
+  legServo.write(currentLegPosition); // Set motor to initial position (90 degrees)
 }
 
 // --- SENSOR DATA PROCESSING ---
@@ -41,7 +50,7 @@ void processEMG() {
   twohead = (twoheadValue > THRESHOLD_TWOHEAD);
 }
 
-// --- SMOOTH POSITION CALCULATION ---
+// --- SMOOTH POSITION CALCULATION & SERVO CONTROL ---
 void calculateSmoothPosition() {
   unsigned long currentMillis = millis();
 
@@ -49,20 +58,29 @@ void calculateSmoothPosition() {
   if (currentMillis - previousMillis >= updateInterval) {
     previousMillis = currentMillis;
 
+    // Flag to check if the motor needs to move
+    bool positionChanged = false;
+
     // --- MAIN CONTROL LOGIC ---
     if (quadro == true && twohead == false) {
       // Extension: smoothly increase the angle
       if (currentLegPosition < 180) {
         currentLegPosition++;
+        positionChanged = true;
       }
     } 
     else if (quadro == false && twohead == true) {
       // Flexion: smoothly decrease the angle
       if (currentLegPosition > 0) {
         currentLegPosition--;
+        positionChanged = true;
       }
     }
-    // If both are true or both are false, the position remains unchanged.
+
+    // If the angle has changed, physically move the servo motor
+    if (positionChanged) {
+      legServo.write(currentLegPosition);
+    }
   }
 }
 
@@ -74,7 +92,7 @@ void loop() {
   // 2. Calculate new smooth position
   calculateSmoothPosition();
 
-  // 3. Debug output to Serial Monitor (сповільнений вивід)
+  // 3. Debug output to Serial Monitor
   unsigned long currentMillis = millis();
   if (currentMillis - previousSerialMillis >= serialInterval) {
     previousSerialMillis = currentMillis;
@@ -84,7 +102,7 @@ void loop() {
     if (quadro == true && twohead == false) {
       legState = "EXTENSION ->";
     } else if (quadro == false && twohead == true) {
-     legState = "<- FLEXION";
+      legState = "<- FLEXION";
     }
 
     // Print clear and readable text to the console
@@ -95,6 +113,6 @@ void loop() {
                   legState.c_str());
   }
 
-  // 4. Critical tiny delay to allow ESP32 background tasks (like USB Serial) to process
+  // 4. Critical tiny delay to allow ESP32 background tasks to process
   delay(10);
 }
