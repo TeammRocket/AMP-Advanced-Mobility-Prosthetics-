@@ -105,8 +105,10 @@ void loop() {
       legState = "<- FLEXION";
     }
 
-    // Print clear and readable text to the console
-    Serial.printf("Quadro: %s | Twohead: %s | Angle: %d | State: %s\n", 
+// Print clear and readable text to the console (NOW WITH RAW VALUES)
+    Serial.printf("Raw Q: %d | Raw T: %d | Quadro: %s | Twohead: %s | Angle: %d | State: %s\n", 
+                  quadroValue,
+                  twoheadValue,
                   quadro ? "TRUE" : "FALSE", 
                   twohead ? "TRUE" : "FALSE", 
                   currentLegPosition, 
