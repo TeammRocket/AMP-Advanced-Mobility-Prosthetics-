@@ -1,100 +1,236 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <LittleFS.h>
+#include <ESP32Servo.h>
+#include <esp_now.h>
 
-// --- PIN CONFIGURATION ---
-const int EMG_QUADRO_PIN = 4;
-const int EMG_TWOHEAD_PIN = 5;
+const int PIN_EMG_QUADRO = 4;
+const int PIN_EMG_TWOHEAD = 5;
+const int PIN_SERVO = 1;
 
-// --- THRESHOLD VALUES ---
-// The signal must exceed this value for the muscle to be considered active
-const int THRESHOLD_QUADRO = 1500;
-const int THRESHOLD_TWOHEAD = 1500;
+Servo myServo;
+int currentLegPosition = 90;
 
-// --- GLOBAL VARIABLES FOR WEB INTERFACE ---
-int quadroValue = 0;
-int twoheadValue = 0;
-bool quadro = false;
-bool twohead = false;
-int currentLegPosition = 90; // Virtual position (0: fully bent, 180: fully extended)
+// Variables for servo power saving
+bool isServoAttached = true;
+unsigned long lastMoveTime = 0;
+const unsigned long SERVO_TIMEOUT = 500; // Time before turning off the motor (ms)
 
-// --- NON-BLOCKING TIMER VARIABLES ---
+int baselineQ = 0, baselineT = 0;
+float gain = 0.2;
+int threshold = 1000;
+
+float smoothedQ = 0, smoothedT = 0;
+const float alpha = 0.2;
+
+bool isTestMode = false;
+bool useEspNow = false;
+unsigned long simStartTime = 0;
+
+bool isCalibrating = false;
+unsigned long calibStartTime = 0;
+long calibSumQ = 0, calibSumT = 0;
+int calibCount = 0;
+
 unsigned long previousMillis = 0;
-const long updateInterval = 15; // Speed of movement in milliseconds (lower is faster)
+const long updateInterval = 15;
+unsigned long lastSendTime = 0;
 
-// Змінні для контролю виводу в Serial Monitor
-unsigned long previousSerialMillis = 0;
-const long serialInterval = 500; // Виводити дані кожні 500 мілісекунд (2 рази на секунду)
+// WEB & ESP-NOW
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
 
-// --- SETUP FUNCTION (Runs once at startup) ---
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+typedef struct struct_message {
+  int angle;
+  bool isActive;
+} struct_message;
+struct_message myData;
+esp_now_peer_info_t peerInfo;
+
+void connectWiFi();
+
+// WEBSOCKET HANDLER
+void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
+  AwsFrameInfo *info = (AwsFrameInfo*)arg;
+  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+    data[len] = 0;
+    String msg = (char*)data;
+    
+    if (msg.indexOf("\"command\":\"calibrate\"") > 0) {
+      isCalibrating = true;
+      calibStartTime = millis();
+      calibSumQ = calibSumT = calibCount = 0;
+    } 
+    else if (msg.indexOf("\"command\":\"test_mode\"") > 0) {
+      isTestMode = msg.indexOf("\"state\":true") > 0;
+      simStartTime = millis();
+    }
+    else if (msg.indexOf("\"command\":\"esp_now\"") > 0) {
+      useEspNow = msg.indexOf("\"state\":true") > 0;
+    }
+    else if (msg.indexOf("\"command\":\"settings\"") > 0) {
+      int gIdx = msg.indexOf("\"gain\":") + 7;
+      int gEnd = msg.indexOf(",", gIdx);
+      gain = msg.substring(gIdx, gEnd).toFloat();
+      
+      int tIdx = msg.indexOf("\"threshold\":") + 12;
+      int tEnd = msg.indexOf("}", tIdx);
+      threshold = msg.substring(tIdx, tEnd).toInt();
+    }
+  }
+}
+
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  if (type == WS_EVT_DATA) handleWebSocketMessage(arg, data, len);
+}
+
+// SETUP
 void setup() {
-  // Initialize serial communication at 115200 baud rate
   Serial.begin(115200);
+  pinMode(PIN_EMG_QUADRO, INPUT);
+  pinMode(PIN_EMG_TWOHEAD, INPUT);
+  
+  // Init Servo
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+  myServo.setPeriodHertz(50);
+  myServo.attach(PIN_SERVO, 500, 2400);
+  myServo.write(currentLegPosition);
+  lastMoveTime = millis();
+
+  if(!LittleFS.begin(true)) Serial.println("FS Error");
+
+  connectWiFi();
+
+  // Init ESP-NOW
+  if (esp_now_init() == ESP_OK) {
+    memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    esp_now_add_peer(&peerInfo);
+  }
+
+  // Init Web Server
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(LittleFS, "/index.html", "text/html");
+  });
+  ws.onEvent(onEvent);
+  server.addHandler(&ws);
+  server.begin();
 }
 
-// --- SENSOR DATA PROCESSING ---
-void processEMG() {
-  // Read analog values from sensors
-  quadroValue = analogRead(EMG_QUADRO_PIN);
-  twoheadValue = analogRead(EMG_TWOHEAD_PIN);
+// MAIN LOOP
+void loop() {
+  ws.cleanupClients(); 
 
-  // Determine muscle state based on thresholds
-  quadro = (quadroValue > THRESHOLD_QUADRO);
-  twohead = (twoheadValue > THRESHOLD_TWOHEAD);
-}
+  // 1. Calibration Routine
+  if (isCalibrating) {
+    if (millis() - calibStartTime < 3000) { 
+      calibSumQ += analogRead(PIN_EMG_QUADRO);
+      calibSumT += analogRead(PIN_EMG_TWOHEAD);
+      calibCount++;
+      delay(5);
+    } else {
+      if (calibCount > 0) {
+        baselineQ = calibSumQ / calibCount;
+        baselineT = calibSumT / calibCount;
+      }
+      isCalibrating = false;
+      ws.textAll("{\"type\":\"calib_done\"}");
+    }
+    return;
+  }
 
-// --- SMOOTH POSITION CALCULATION ---
-void calculateSmoothPosition() {
+  // 2. Process EMG Data
+  int finalQ = 0, finalT = 0;
+
+  if (isTestMode) {
+    float timeSec = (millis() - simStartTime) / 1000.0;
+    finalQ = (int)(((sin(timeSec * 3.0) + 1.0) / 2.0) * 1500); 
+    finalT = (int)(((cos(timeSec * 3.0) + 1.0) / 2.0) * 1500);
+  } else {
+    int rawQ = abs(analogRead(PIN_EMG_QUADRO) - baselineQ);
+    int rawT = abs(analogRead(PIN_EMG_TWOHEAD) - baselineT);
+    
+    smoothedQ = (alpha * rawQ) + ((1.0 - alpha) * smoothedQ);
+    smoothedT = (alpha * rawT) + ((1.0 - alpha) * smoothedT);
+    
+    finalQ = (int)(smoothedQ * gain);
+    finalT = (int)(smoothedT * gain);
+  }
+
+  bool quadroActive = finalQ > threshold;
+  bool twoheadActive = finalT > threshold;
+  String stateStr = "REST";
+  bool positionChanged = false; // Flag to track if the angle changed this cycle
+
+  // 3. Smooth Position Calculation
   unsigned long currentMillis = millis();
-
-  // Update position only if the specified interval has passed
   if (currentMillis - previousMillis >= updateInterval) {
     previousMillis = currentMillis;
 
-    // --- MAIN CONTROL LOGIC ---
-    if (quadro == true && twohead == false) {
-      // Extension: smoothly increase the angle
+    if (quadroActive && !twoheadActive) {
       if (currentLegPosition < 180) {
-        currentLegPosition++;
+        currentLegPosition++; // Extending
+        positionChanged = true;
       }
+      stateStr = "EXTENDING";
     } 
-    else if (quadro == false && twohead == true) {
-      // Flexion: smoothly decrease the angle
+    else if (!quadroActive && twoheadActive) {
       if (currentLegPosition > 0) {
-        currentLegPosition--;
+        currentLegPosition--;   // Flexing
+        positionChanged = true;
+      }
+      stateStr = "FLEXING";
+    }
+  }
+
+  // 4. Update Hardware (with power saving logic)
+  if (!useEspNow) {
+    if (positionChanged) {
+      // Re-attach servo if it was detached
+      if (!isServoAttached) {
+        myServo.attach(PIN_SERVO, 500, 2400); 
+        isServoAttached = true;
+      }
+      myServo.write(currentLegPosition);
+      lastMoveTime = millis();
+    } else {
+      // Detach servo to save battery if inactive for SERVO_TIMEOUT ms
+      if (isServoAttached && (millis() - lastMoveTime > SERVO_TIMEOUT)) {
+        myServo.detach(); 
+        isServoAttached = false;
       }
     }
-    // If both are true or both are false, the position remains unchanged.
-  }
-}
-
-// --- MAIN LOOP (Runs continuously) ---
-void loop() {
-  // 1. Update sensor data
-  processEMG();
-
-  // 2. Calculate new smooth position
-  calculateSmoothPosition();
-
-  // 3. Debug output to Serial Monitor (сповільнений вивід)
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousSerialMillis >= serialInterval) {
-    previousSerialMillis = currentMillis;
-    
-    // Determine the text state of the leg
-    String legState = "REST (Fixed)";
-    if (quadro == true && twohead == false) {
-      legState = "EXTENSION ->";
-    } else if (quadro == false && twohead == true) {
-     legState = "<- FLEXION";
+  } else {
+    // If ESP-NOW is enabled, local servo must be detached
+    if (isServoAttached) {
+      myServo.detach();
+      isServoAttached = false;
     }
-
-    // Print clear and readable text to the console
-    Serial.printf("Quadro: %s | Twohead: %s | Angle: %d | State: %s\n", 
-                  quadro ? "TRUE" : "FALSE", 
-                  twohead ? "TRUE" : "FALSE", 
-                  currentLegPosition, 
-                  legState.c_str());
   }
 
-  // 4. Critical tiny delay to allow ESP32 background tasks (like USB Serial) to process
-  delay(10);
+  // 5. Send Data (Web UI & ESP-NOW)
+  if (millis() - lastSendTime > 50) {
+    // Send to Web
+    String json = "{\"type\":\"data\",\"emgQ\":" + String(finalQ) + 
+                  ",\"emgT\":" + String(finalT) +
+                  ",\"threshold\":" + String(threshold) + 
+                  ",\"state\":\"" + stateStr + "\"}";
+    ws.textAll(json);
+
+    // Send via ESP-NOW
+    if (useEspNow) {
+      myData.angle = currentLegPosition;
+      myData.isActive = (stateStr != "REST");
+      esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
+    }
+    
+    lastSendTime = millis();
+  }
 }

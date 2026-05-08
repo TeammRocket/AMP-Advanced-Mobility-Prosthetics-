@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="uk">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -25,6 +25,12 @@
         .btn:active { transform: scale(0.98); }
         .btn-test { background: #333; color: #fff; border: 1px solid #03dac6; }
         .btn-test.active { background: #03dac6; color: #000; }
+        .btn-esp { background: #333; color: #fff; border: 1px solid #bb86fc; }
+        .btn-esp.active { background: #bb86fc; color: #000; }
+        
+        .legend { display: flex; gap: 20px; margin-top: 10px; font-size: 14px;}
+        .leg-quadro { color: #03dac6; font-weight: bold; }
+        .leg-twohead { color: #bb86fc; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -37,26 +43,33 @@
 
     <div class="content">
         <div id="graphic" class="tab-content active">
-            <h2 id="modeTitle">Live EMG Signal</h2>
+            <h2 id="modeTitle">Live EMG Signals</h2>
             <canvas id="emgChart"></canvas>
-            <div class="status-bar">Signal: <span id="currentVal">0</span> | Motor: <span id="motorState" style="color:#cf6679;">REST</span></div>
+            <div class="legend">
+                <span class="leg-quadro">■ Quadriceps (Extending): <span id="valQ">0</span></span>
+                <span class="leg-twohead">■ Biceps Fem. (Flexing): <span id="valT">0</span></span>
+            </div>
+            <div class="status-bar">State: <span id="motorState" style="color:#cf6679;">REST</span></div>
         </div>
 
         <div id="settings" class="tab-content">
             <h2>Prosthesis Settings</h2>
             
             <div class="setting-group">
-                <button id="testBtn" class="btn btn-test" onclick="toggleTestMode()">TEST MODE: OFF</button>
-                <p style="color: #aaa; font-size: 12px; margin-top: 5px;">Simulates muscle movement and sends data to the second ESP32 via ESP-NOW.</p>
+                <button id="espNowBtn" class="btn btn-esp" onclick="toggleEspNow()">ESP-NOW: OFF</button>
+                <p style="color: #aaa; font-size: 12px; margin-top: 5px;">When ON, local servo is disabled and signals are sent to the receiver via ESP-NOW.</p>
+                
+                <button id="testBtn" class="btn btn-test" onclick="toggleTestMode()" style="margin-top: 10px;">TEST MODE: OFF</button>
+                <p style="color: #aaa; font-size: 12px; margin-top: 5px;">Simulates dual muscle input without needing the physical sensors.</p>
             </div>
 
             <div class="setting-group">
-                <label>Gain (Multiplier) <span id="gainVal" class="val-display">1.0</span></label>
+                <label>Gain Multiplier <span id="gainVal" class="val-display">1.0</span></label>
                 <input type="range" id="gain" min="0.1" max="5.0" step="0.1" value="1.0" oninput="updateSettings()">
             </div>
 
             <div class="setting-group">
-                <label>Threshold (Trigger limit) <span id="threshVal" class="val-display">200</span></label>
+                <label>Activation Threshold <span id="threshVal" class="val-display">200</span></label>
                 <input type="range" id="threshold" min="50" max="1500" step="10" value="200" oninput="updateSettings()">
             </div>
 
@@ -77,6 +90,7 @@
         var gateway = `ws://${window.location.hostname}/ws`;
         var websocket;
         var isTestMode = false;
+        var isEspNowOn = false;
         
         function initWebSocket() {
             websocket = new WebSocket(gateway);
@@ -88,12 +102,17 @@
         function onMessage(event) {
             var data = JSON.parse(event.data);
             if(data.type === "data") {
-                document.getElementById('currentVal').innerText = data.emg;
-                document.getElementById('motorState').innerText = data.active ? "EXTENDING" : "REST";
-                document.getElementById('motorState').style.color = data.active ? "#03dac6" : "#cf6679";
-                addData(data.emg, data.threshold);
+                document.getElementById('valQ').innerText = data.emgQ;
+                document.getElementById('valT').innerText = data.emgT;
+                document.getElementById('motorState').innerText = data.state;
+                
+                if(data.state === "EXTENDING") document.getElementById('motorState').style.color = "#03dac6";
+                else if(data.state === "FLEXING") document.getElementById('motorState').style.color = "#bb86fc";
+                else document.getElementById('motorState').style.color = "#cf6679";
+                
+                addData(data.emgQ, data.emgT, data.threshold);
             } else if (data.type === "calib_done") {
-                alert("Calibration complete! Baseline: " + data.baseline);
+                alert("Calibration complete!");
             }
         }
 
@@ -107,7 +126,7 @@
 
         function calibrate() {
             websocket.send(JSON.stringify({ command: "calibrate" }));
-            alert("Calibration started... Please keep your leg relaxed for 3 seconds.");
+            alert("Calibration started... Please keep your muscles relaxed for 3 seconds.");
         }
 
         function toggleTestMode() {
@@ -117,26 +136,43 @@
             if(isTestMode) {
                 btn.innerText = "TEST MODE: ON";
                 btn.classList.add('active');
-                title.innerText = "Simulation Mode (Sending to ESP-NOW)";
-                title.style.color = "#03dac6";
+                title.innerText = "Simulation Mode";
             } else {
                 btn.innerText = "TEST MODE: OFF";
                 btn.classList.remove('active');
-                title.innerText = "Live EMG Signal";
-                title.style.color = "#e0e0e0";
+                title.innerText = "Live EMG Signals";
             }
             websocket.send(JSON.stringify({ command: "test_mode", state: isTestMode }));
+        }
+
+        function toggleEspNow() {
+            isEspNowOn = !isEspNowOn;
+            var btn = document.getElementById('espNowBtn');
+            if(isEspNowOn) {
+                btn.innerText = "ESP-NOW: ON";
+                btn.classList.add('active');
+            } else {
+                btn.innerText = "ESP-NOW: OFF";
+                btn.classList.remove('active');
+            }
+            websocket.send(JSON.stringify({ command: "esp_now", state: isEspNowOn }));
         }
 
         window.addEventListener('load', () => { initWebSocket(); initGraph(); });
 
         const canvas = document.getElementById('emgChart');
         const ctx = canvas.getContext('2d');
-        let dataPoints = new Array(100).fill(0);
+        let dataPointsQ = new Array(100).fill(0);
+        let dataPointsT = new Array(100).fill(0);
         let currentThreshold = 200;
 
         function initGraph() { canvas.width = canvas.parentElement.clientWidth; canvas.height = 400; drawGraph(); }
-        function addData(val, thresh) { dataPoints.push(val); dataPoints.shift(); currentThreshold = thresh; drawGraph(); }
+        function addData(valQ, valT, thresh) { 
+            dataPointsQ.push(valQ); dataPointsQ.shift(); 
+            dataPointsT.push(valT); dataPointsT.shift(); 
+            currentThreshold = thresh; 
+            drawGraph(); 
+        }
 
         function drawGraph() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -150,11 +186,20 @@
             ctx.beginPath(); ctx.moveTo(0, threshY); ctx.lineTo(canvas.width, threshY); ctx.stroke();
             ctx.setLineDash([]);
 
-            ctx.strokeStyle = isTestMode ? '#bb86fc' : '#03dac6'; // graph color changed in test mode
-            ctx.lineWidth = 3; ctx.beginPath();
-            for (let i = 0; i < dataPoints.length; i++) {
-                let x = (i / (dataPoints.length - 1)) * canvas.width;
-                let y = canvas.height - (dataPoints[i] / maxGraphVal) * canvas.height;
+            // Draw Quadriceps (Q)
+            ctx.strokeStyle = '#03dac6'; ctx.lineWidth = 3; ctx.beginPath();
+            for (let i = 0; i < dataPointsQ.length; i++) {
+                let x = (i / (dataPointsQ.length - 1)) * canvas.width;
+                let y = canvas.height - (dataPointsQ[i] / maxGraphVal) * canvas.height;
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+
+            // Draw Biceps Femoris (T)
+            ctx.strokeStyle = '#bb86fc'; ctx.lineWidth = 3; ctx.beginPath();
+            for (let i = 0; i < dataPointsT.length; i++) {
+                let x = (i / (dataPointsT.length - 1)) * canvas.width;
+                let y = canvas.height - (dataPointsT[i] / maxGraphVal) * canvas.height;
                 if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             }
             ctx.stroke();
