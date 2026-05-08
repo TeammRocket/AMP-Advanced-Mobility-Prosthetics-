@@ -1,11 +1,12 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ESP32Servo.h>
-#include <algorithm> // For std::sort
-#include <WiFiManager.h> // Handles Wi-Fi connection automatically
+#include <algorithm> 
+#include <WiFiManager.h> 
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
+#include <esp_now.h> // Restored ESP-NOW
 
 // --- PIN CONFIGURATION ---
 const int EMG_QUADRO_PIN = 4;
@@ -39,6 +40,11 @@ String legState = "REST (Fixed)";
 
 Servo legServo;
 
+// --- POWER SAVING VARIABLES ---
+bool isServoAttached = true;
+unsigned long lastMoveTime = 0;
+const unsigned long SERVO_TIMEOUT = 500; // ms to sleep servo
+
 // --- TIMERS ---
 unsigned long previousMillis = 0;
 const long updateInterval = 15;
@@ -47,13 +53,24 @@ unsigned long previousSerialMillis = 0;
 const long serialInterval = 500;
 
 unsigned long lastWsSendTime = 0;
-const long wsInterval = 50; // Send data to Web UI every 50ms
+const long wsInterval = 50; 
 
-// --- WEB & TEST MODE VARIABLES ---
+// --- WEB, ESP-NOW & TEST MODE VARIABLES ---
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
+
 bool isTestMode = false;
+bool useEspNow = false;
 unsigned long simStartTime = 0;
+bool startCalibrationFlag = false; // Safe flag for web calibration
+
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+typedef struct struct_message {
+  int angle;
+  bool isActive;
+} struct_message;
+struct_message myData;
+esp_now_peer_info_t peerInfo;
 
 // --- FORWARD DECLARATIONS ---
 void calibrateSensors();
@@ -65,17 +82,21 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
     data[len] = 0;
     String msg = (char*)data;
     
-    // Command: Start Calibration
+    // Command: Start Calibration (Flag set to avoid Watchdog crash)
     if (msg.indexOf("\"command\":\"calibrate\"") > 0) {
-      Serial.println("\n[WEB COMMAND] Starting Calibration...");
-      calibrateSensors();
-      ws.textAll("{\"type\":\"calib_done\"}");
+      Serial.println("\n[WEB COMMAND] Calibration Requested...");
+      startCalibrationFlag = true; 
     } 
     // Command: Toggle Test Mode
     else if (msg.indexOf("\"command\":\"test_mode\"") > 0) {
       isTestMode = msg.indexOf("\"state\":true") > 0;
       simStartTime = millis();
       Serial.printf("\n[WEB COMMAND] Test Mode: %s\n", isTestMode ? "ON" : "OFF");
+    }
+    // Command: Toggle ESP-NOW
+    else if (msg.indexOf("\"command\":\"esp_now\"") > 0) {
+      useEspNow = msg.indexOf("\"state\":true") > 0;
+      Serial.printf("\n[WEB COMMAND] ESP-NOW: %s\n", useEspNow ? "ON" : "OFF");
     }
   }
 }
@@ -163,19 +184,17 @@ void calibrateSensors() {
 // --- SETUP FUNCTION ---
 void setup() {
   Serial.begin(115200);
-  delay(1000); // Allow serial to initialize
+  delay(1000); 
   
   // 1. Initialize File System
   if(!LittleFS.begin(true)){
-    Serial.println("LittleFS Mount Failed. Formatting...");
+    Serial.println("LittleFS Mount Failed.");
     return;
   }
-  Serial.println("LittleFS Mounted Successfully.");
 
-  // 2. Initialize Wi-Fi using WiFiManager (Blocks until connected)
+  // 2. Initialize Wi-Fi using WiFiManager
   WiFiManager wm;
-  // wm.resetSettings(); // Uncomment to force Wi-Fi setup every time
-  Serial.println("Connecting to Wi-Fi (or starting AP 'Prosthesis_AP')...");
+  Serial.println("Connecting to Wi-Fi...");
   bool res = wm.autoConnect("Prosthesis_AP");
   if(!res) {
       Serial.println("Failed to connect to Wi-Fi. Restarting...");
@@ -184,19 +203,28 @@ void setup() {
   Serial.print("Wi-Fi Connected! IP Address: ");
   Serial.println(WiFi.localIP());
 
-  // 3. Initialize Servo (З обов'язковими таймерами для стабільності ESP32-S3)
+  // 3. Initialize ESP-NOW
+  if (esp_now_init() == ESP_OK) {
+    memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    esp_now_add_peer(&peerInfo);
+  }
+
+  // 4. Initialize Servo
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
   ESP32PWM::allocateTimer(2);
   ESP32PWM::allocateTimer(3);
-  legServo.setPeriodHertz(50); // Стандартна частота для сервоприводів
-  legServo.attach(SERVO_PIN);
+  legServo.setPeriodHertz(50); 
+  legServo.attach(SERVO_PIN, 500, 2400);
   legServo.write(currentLegPosition);
+  lastMoveTime = millis();
 
-  // 4. Run Hardware Calibration
+  // 5. Run Hardware Calibration
   calibrateSensors();
 
-  // 5. Setup Web Server Routes
+  // 6. Setup Web Server
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/index.html", "text/html");
   });
@@ -213,21 +241,17 @@ void processEMG() {
   int rawT = 0;
 
   if (isTestMode) {
-    // Generate artificial sine waves for Web UI testing
     float timeSec = (millis() - simStartTime) / 1000.0;
     float waveQ = (sin(timeSec * 2.0) + 1.0) / 2.0; 
     float waveT = (cos(timeSec * 2.0) + 1.0) / 2.0; 
     
-    // Simulate raw values dynamically going above thresholds
     rawQ = (int)(waveQ * (THRESHOLD_QUADRO * 1.5)); 
     rawT = (int)(waveT * (THRESHOLD_TWOHEAD * 1.5));
   } else {
-    // Read real hardware data
     rawQ = analogRead(EMG_QUADRO_PIN);
     rawT = analogRead(EMG_TWOHEAD_PIN);
   }
 
-  // Apply EMA filter
   smoothedQuadro = (EMA_ALPHA * rawQ) + ((1.0 - EMA_ALPHA) * smoothedQuadro);
   smoothedTwohead = (EMA_ALPHA * rawT) + ((1.0 - EMA_ALPHA) * smoothedTwohead);
 
@@ -238,65 +262,89 @@ void processEMG() {
   twohead = (twoheadValue > THRESHOLD_TWOHEAD);
 }
 
-// --- SMOOTH POSITION CALCULATION & SERVO CONTROL ---
-void calculateSmoothPosition() {
+// --- MAIN LOOP ---
+void loop() {
+  ws.cleanupClients(); 
+
+  // Safe Web Calibration execution
+  if (startCalibrationFlag) {
+    calibrateSensors();
+    ws.textAll("{\"type\":\"calib_done\"}");
+    startCalibrationFlag = false;
+  }
+
+  processEMG();
+
+  // --- SMOOTH POSITION CALCULATION ---
   unsigned long currentMillis = millis();
+  bool positionChanged = false;
 
   if (currentMillis - previousMillis >= updateInterval) {
     previousMillis = currentMillis;
-    bool positionChanged = false;
-
-    // Update global state string for Web UI and Console
     legState = "REST";
 
-    if (quadro == true && twohead == false) {
+    if (quadro && !twohead) {
       legState = "EXTENDING";
       if (currentLegPosition < MAX_ANGLE) {
         currentLegPosition++;
         positionChanged = true;
       }
     } 
-    else if (quadro == false && twohead == true) {
+    else if (!quadro && twohead) {
       legState = "FLEXING";
       if (currentLegPosition > MIN_ANGLE) {
         currentLegPosition--;
         positionChanged = true;
       }
     }
+  }
 
+  // --- HARDWARE CONTROL & POWER SAVING ---
+  if (!useEspNow) {
     if (positionChanged) {
+      if (!isServoAttached) {
+        legServo.attach(SERVO_PIN, 500, 2400);
+        isServoAttached = true;
+      }
       legServo.write(currentLegPosition);
+      lastMoveTime = currentMillis;
+    } else {
+      if (isServoAttached && (currentMillis - lastMoveTime > SERVO_TIMEOUT)) {
+        legServo.detach(); // Save power
+        isServoAttached = false;
+      }
+    }
+  } else {
+    if (isServoAttached) {
+      legServo.detach();
+      isServoAttached = false;
     }
   }
-}
 
-// --- MAIN LOOP ---
-void loop() {
-  ws.cleanupClients(); 
-
-  processEMG();
-  calculateSmoothPosition();
-
-  unsigned long currentMillis = millis();
-
-  // 1. Send data to WebSocket clients (Fast: every 50ms)
+  // --- SEND DATA VIA WEB & ESP-NOW ---
   if (currentMillis - lastWsSendTime >= wsInterval) {
     lastWsSendTime = currentMillis;
     
-    // Create average threshold for simple UI display
     int avgThreshold = (THRESHOLD_QUADRO + THRESHOLD_TWOHEAD) / 2;
 
+    // Send WebSocket
     String json = "{\"type\":\"data\",\"emgQ\":" + String(quadroValue) + 
                   ",\"emgT\":" + String(twoheadValue) +
                   ",\"threshold\":" + String(avgThreshold) + 
                   ",\"state\":\"" + legState + "\"}";
     ws.textAll(json);
+
+    // Send ESP-NOW
+    if (useEspNow) {
+      myData.angle = currentLegPosition;
+      myData.isActive = (legState != "REST");
+      esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
+    }
   }
 
-  // 2. Debug output to Serial Monitor (Slow: every 500ms)
+  // --- DEBUG OUTPUT ---
   if (currentMillis - previousSerialMillis >= serialInterval) {
     previousSerialMillis = currentMillis;
-    
     Serial.printf("[%s] Raw Q: %4d | Raw T: %4d | Angle: %3d | State: %s\n", 
                   isTestMode ? "TEST " : "REAL",
                   quadroValue, twoheadValue,
