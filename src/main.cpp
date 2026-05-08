@@ -2,8 +2,8 @@
 #include <WebServer.h>
 #include <ESP32Servo.h>
 
-const char* ssid = "DLS";
-const char* password = "future2809";
+const char* ssid = "ssid";
+const char* password = "pswrd";
 const int servoPin = 2;
 
 WebServer server(80);
