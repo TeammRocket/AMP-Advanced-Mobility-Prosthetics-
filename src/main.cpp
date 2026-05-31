@@ -4,7 +4,7 @@
 #include <esp_wifi.h>
 #include <ESP32Servo.h>
 
-const int SERVO_PIN = 1; 
+const int SERVO_PIN = 2; 
 Servo legServo;
 
 typedef struct struct_message {
