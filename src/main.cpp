@@ -95,6 +95,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
                receiverAddress[3], receiverAddress[4], receiverAddress[5]);
       rxMacString = String(macStr);
       if (!esp_now_is_peer_exist(receiverAddress)) {
+        memset(&peerInfo, 0, sizeof(peerInfo)); // Fix for reliable connection
         memcpy(peerInfo.peer_addr, receiverAddress, 6);
         peerInfo.channel = WiFi.channel();
         peerInfo.encrypt = false;
@@ -248,8 +249,9 @@ void setup() {
   // 3. Initialize ESP-NOW
   if (esp_now_init() == ESP_OK) {
     esp_now_register_recv_cb(OnDataRecv);
+    memset(&peerInfo, 0, sizeof(peerInfo)); // Fix for reliable connection
     memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-    peerInfo.channel = WiFi.channel();
+    peerInfo.channel = 0;
     peerInfo.encrypt = false;
     esp_now_add_peer(&peerInfo);
   }
@@ -336,6 +338,7 @@ void loop() {
     previousMillis = currentMillis;
     legState = "REST (Fixed)";
 
+    // Original Movement Logic Preserved
     if (quadro && !twohead) {
       legState = "EXTENDING";
       if (currentLegPosition < MAX_ANGLE) {
@@ -372,7 +375,8 @@ void loop() {
       legServo.detach();
       isServoAttached = false;
     }
-    if (!receiverConnected && currentMillis - lastSyncTime > 2000) {
+    // Faster Sync: Every 250ms until connected
+    if (!receiverConnected && currentMillis - lastSyncTime > 250) {
       myData.type = 0;
       WiFi.macAddress(myData.macAddr);
       esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
