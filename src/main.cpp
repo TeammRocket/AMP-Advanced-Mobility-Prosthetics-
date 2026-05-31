@@ -6,7 +6,7 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
-#include <esp_now.h> // Restored ESP-NOW
+#include <esp_now.h> 
 
 // --- PIN CONFIGURATION ---
 const int EMG_QUADRO_PIN = 4;
@@ -14,12 +14,14 @@ const int EMG_TWOHEAD_PIN = 5;
 const int SERVO_PIN = 1;
 
 // --- SERVO LIMITS ---
-const int MIN_ANGLE = 5;   
-const int MAX_ANGLE = 175; 
+int MIN_ANGLE = 5;   
+int MAX_ANGLE = 175; 
+int REST_ANGLE = 90; 
 
 // --- DYNAMIC THRESHOLD VALUES ---
 int THRESHOLD_QUADRO = 1500; 
 int THRESHOLD_TWOHEAD = 1500;
+float emgGain = 1.0;
 
 // --- CALIBRATION SETTINGS ---
 const int CALIBRATION_SAMPLES = 200; 
@@ -43,7 +45,7 @@ Servo legServo;
 // --- POWER SAVING VARIABLES ---
 bool isServoAttached = true;
 unsigned long lastMoveTime = 0;
-const unsigned long SERVO_TIMEOUT = 500; // ms to sleep servo
+const unsigned long SERVO_TIMEOUT = 5000;
 
 // --- TIMERS ---
 unsigned long previousMillis = 0;
@@ -65,15 +67,42 @@ unsigned long simStartTime = 0;
 bool startCalibrationFlag = false; // Safe flag for web calibration
 
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+uint8_t receiverAddress[6] = {0, 0, 0, 0, 0, 0};
+bool receiverConnected = false;
+unsigned long lastSyncTime = 0;
+String rxMacString = "-";
+
 typedef struct struct_message {
+  uint8_t type;
+  uint8_t macAddr[6];
   int angle;
-  bool isActive;
 } struct_message;
 struct_message myData;
 esp_now_peer_info_t peerInfo;
 
 // --- FORWARD DECLARATIONS ---
 void calibrateSensors();
+
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  if (len == sizeof(struct_message)) {
+    struct_message *msg = (struct_message *)incomingData;
+    if (msg->type == 1) { 
+      memcpy(receiverAddress, msg->macAddr, 6);
+      receiverConnected = true;
+      char macStr[18];
+      snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+               receiverAddress[0], receiverAddress[1], receiverAddress[2],
+               receiverAddress[3], receiverAddress[4], receiverAddress[5]);
+      rxMacString = String(macStr);
+      if (!esp_now_is_peer_exist(receiverAddress)) {
+        memcpy(peerInfo.peer_addr, receiverAddress, 6);
+        peerInfo.channel = WiFi.channel();
+        peerInfo.encrypt = false;
+        esp_now_add_peer(&peerInfo);
+      }
+    }
+  }
+}
 
 // --- WEBSOCKET EVENT HANDLER ---
 void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
@@ -97,6 +126,16 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
     else if (msg.indexOf("\"command\":\"esp_now\"") > 0) {
       useEspNow = msg.indexOf("\"state\":true") > 0;
       Serial.printf("\n[WEB COMMAND] ESP-NOW: %s\n", useEspNow ? "ON" : "OFF");
+    }
+    else if (msg.indexOf("\"command\":\"settings\"") > 0) {
+      if (msg.indexOf("\"gain\":") > 0) emgGain = msg.substring(msg.indexOf("\"gain\":") + 7, msg.indexOf(",", msg.indexOf("\"gain\":"))).toFloat();
+      if (msg.indexOf("\"threshold\":") > 0) {
+        int t = msg.substring(msg.indexOf("\"threshold\":") + 12, msg.indexOf(",", msg.indexOf("\"threshold\":"))).toInt();
+        THRESHOLD_QUADRO = t; THRESHOLD_TWOHEAD = t;
+      }
+      if (msg.indexOf("\"restAngle\":") > 0) REST_ANGLE = msg.substring(msg.indexOf("\"restAngle\":") + 12, msg.indexOf(",", msg.indexOf("\"restAngle\":"))).toInt();
+      if (msg.indexOf("\"minAngle\":") > 0) MIN_ANGLE = msg.substring(msg.indexOf("\"minAngle\":") + 11, msg.indexOf(",", msg.indexOf("\"minAngle\":"))).toInt();
+      if (msg.indexOf("\"maxAngle\":") > 0) MAX_ANGLE = msg.substring(msg.indexOf("\"maxAngle\":") + 11, msg.indexOf("}", msg.indexOf("\"maxAngle\":"))).toInt();
     }
   }
 }
@@ -127,6 +166,7 @@ void calibrateSensors() {
     qRest[i] = analogRead(EMG_QUADRO_PIN);
     tRest[i] = analogRead(EMG_TWOHEAD_PIN);
     delay(10); 
+    yield();
   }
 
   Serial.println("\nSTEP 2: Prepare to FLEX your muscles to the MAXIMUM!");
@@ -139,6 +179,7 @@ void calibrateSensors() {
     qFlex[i] = analogRead(EMG_QUADRO_PIN);
     tFlex[i] = analogRead(EMG_TWOHEAD_PIN);
     delay(10);
+    yield();
   }
 
   Serial.println("\n--> PROCESSING DATA...");
@@ -193,6 +234,7 @@ void setup() {
   }
 
   // 2. Initialize Wi-Fi using WiFiManager
+  WiFi.mode(WIFI_AP_STA);
   WiFiManager wm;
   Serial.println("Connecting to Wi-Fi...");
   bool res = wm.autoConnect("Prosthesis_AP");
@@ -205,8 +247,9 @@ void setup() {
 
   // 3. Initialize ESP-NOW
   if (esp_now_init() == ESP_OK) {
+    esp_now_register_recv_cb(OnDataRecv);
     memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-    peerInfo.channel = 0;
+    peerInfo.channel = WiFi.channel();
     peerInfo.encrypt = false;
     esp_now_add_peer(&peerInfo);
   }
@@ -241,15 +284,25 @@ void processEMG() {
   int rawT = 0;
 
   if (isTestMode) {
-    float timeSec = (millis() - simStartTime) / 1000.0;
-    float waveQ = (sin(timeSec * 2.0) + 1.0) / 2.0; 
-    float waveT = (cos(timeSec * 2.0) + 1.0) / 2.0; 
+    unsigned long elapsed = millis() - simStartTime;
+    int phase = (elapsed / 2000) % 3;
     
-    rawQ = (int)(waveQ * (THRESHOLD_QUADRO * 1.5)); 
-    rawT = (int)(waveT * (THRESHOLD_TWOHEAD * 1.5));
+    int noise = random(0, 50);
+    int activeSignal = 500 + random(-50, 50);
+
+    if (phase == 0) {
+      rawQ = noise;
+      rawT = THRESHOLD_TWOHEAD + activeSignal;
+    } else if (phase == 1) {
+      rawQ = noise;
+      rawT = noise;
+    } else if (phase == 2) {
+      rawQ = THRESHOLD_QUADRO + activeSignal;
+      rawT = noise;
+    }
   } else {
-    rawQ = analogRead(EMG_QUADRO_PIN);
-    rawT = analogRead(EMG_TWOHEAD_PIN);
+    rawQ = analogRead(EMG_QUADRO_PIN) * emgGain;
+    rawT = analogRead(EMG_TWOHEAD_PIN) * emgGain;
   }
 
   smoothedQuadro = (EMA_ALPHA * rawQ) + ((1.0 - EMA_ALPHA) * smoothedQuadro);
@@ -281,7 +334,7 @@ void loop() {
 
   if (currentMillis - previousMillis >= updateInterval) {
     previousMillis = currentMillis;
-    legState = "REST";
+    legState = "REST (Fixed)";
 
     if (quadro && !twohead) {
       legState = "EXTENDING";
@@ -319,6 +372,17 @@ void loop() {
       legServo.detach();
       isServoAttached = false;
     }
+    if (!receiverConnected && currentMillis - lastSyncTime > 2000) {
+      myData.type = 0;
+      WiFi.macAddress(myData.macAddr);
+      esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
+      lastSyncTime = currentMillis;
+    }
+    if (receiverConnected && positionChanged) {
+      myData.type = 2;
+      myData.angle = currentLegPosition;
+      esp_now_send(receiverAddress, (uint8_t *) &myData, sizeof(myData));
+    }
   }
 
   // --- SEND DATA VIA WEB & ESP-NOW ---
@@ -331,15 +395,10 @@ void loop() {
     String json = "{\"type\":\"data\",\"emgQ\":" + String(quadroValue) + 
                   ",\"emgT\":" + String(twoheadValue) +
                   ",\"threshold\":" + String(avgThreshold) + 
-                  ",\"state\":\"" + legState + "\"}";
+                  ",\"state\":\"" + legState + "\"" +
+                  ",\"rxStatus\":\"" + (receiverConnected ? "Connected" : "Searching") + "\"" +
+                  ",\"rxMac\":\"" + rxMacString + "\"}";
     ws.textAll(json);
-
-    // Send ESP-NOW
-    if (useEspNow) {
-      myData.angle = currentLegPosition;
-      myData.isActive = (legState != "REST");
-      esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
-    }
   }
 
   // --- DEBUG OUTPUT ---
