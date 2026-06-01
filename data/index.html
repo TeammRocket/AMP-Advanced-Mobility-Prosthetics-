@@ -2,269 +2,105 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="color-scheme" content="dark">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AMP Controller</title>
     <style>
-        :root {
-            --glass-bg: rgba(255, 255, 255, 0.05);
-            --glass-border: rgba(255, 255, 255, 0.1);
-            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
-            --accent: #00d2ff;
-            --accent-alt: #bb86fc;
-            --danger: #cf6679;
-        }
-
-        body, html { 
-            background-color: #0d1117;
-            background-image: linear-gradient(135deg, #0f111a 0%, #1a1d2e 50%, #0d1b2a 100%);
-            color: #e0e0e0; 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-            margin: 0; 
-            padding: 0;
-            height: 100dvh; 
-            width: 100vw;
-            overflow: hidden; 
-            display: flex;
-            flex-direction: column;
-        }
-
-        /* Abstract blobs for glass refraction effect */
-        .blob1 { position: absolute; width: 300px; height: 300px; background: rgba(0, 210, 255, 0.15); border-radius: 50%; filter: blur(60px); top: -50px; left: -50px; z-index: -1; animation: float 10s infinite alternate; }
-        .blob2 { position: absolute; width: 250px; height: 250px; background: rgba(187, 134, 252, 0.1); border-radius: 50%; filter: blur(60px); bottom: 100px; right: -50px; z-index: -1; animation: float 8s infinite alternate-reverse; }
-
-        @keyframes float {
-            0% { transform: translateY(0) scale(1); }
-            100% { transform: translateY(30px) scale(1.1); }
-        }
-
-        /* Top Header - with Safe Area inset for iPhone Notch */
-        .header {
-            padding: calc(15px + env(safe-area-inset-top, 20px)) 20px 15px 20px;
-            text-align: center;
-            font-size: 22px;
-            font-weight: 600;
-            letter-spacing: 2px;
-            background: rgba(0,0,0,0.3);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border-bottom: 1px solid var(--glass-border);
-            z-index: 10;
-        }
-        .header span { color: var(--accent); }
-
-        /* Main Content Area */
-        .content { 
-            flex-grow: 1; 
-            padding: 20px; 
-            overflow-y: auto;
-            padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px));
-            -webkit-overflow-scrolling: touch;
-        }
-
-        .content::-webkit-scrollbar { display: none; }
-
-        .tab-content { display: none; animation: fadeIn 0.4s ease; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background: #121212; color: #e0e0e0; display: flex; height: 100vh; }
+        .sidebar { width: 250px; background: #1e1e1e; border-right: 1px solid #333; display: flex; flex-direction: column; }
+        .logo { padding: 20px; font-size: 24px; font-weight: bold; border-bottom: 1px solid #333; color: #bb86fc; letter-spacing: 2px;}
+        .menu-item { padding: 15px 20px; cursor: pointer; transition: 0.2s; border-left: 4px solid transparent; }
+        .menu-item:hover { background: #2a2a2a; }
+        .menu-item.active { background: #2a2a2a; border-left: 4px solid #bb86fc; color: #fff; }
+        .content { flex-grow: 1; padding: 30px; display: flex; flex-direction: column; overflow-y: auto; }
+        .tab-content { display: none; }
         .tab-content.active { display: block; }
-
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-        /* Glass Cards */
-        .glass-card { 
-            background: var(--glass-bg); 
-            backdrop-filter: blur(16px); 
-            -webkit-backdrop-filter: blur(16px); 
-            border: 1px solid var(--glass-border); 
-            border-radius: 24px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: var(--glass-shadow);
-        }
-
-        .glass-card h2 { margin-top: 0; font-size: 18px; font-weight: 500; margin-bottom: 15px; color: #fff; }
-
-        /* Chart */
-        canvas { background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); border-radius: 16px; width: 100%; height: 250px; }
+        canvas { background: #1e1e1e; border: 1px solid #333; border-radius: 8px; width: 100%; height: 400px; }
+        .status-bar { margin-top: 15px; font-size: 18px; color: #03dac6; }
+        .setting-group { margin-bottom: 25px; background: #1e1e1e; padding: 20px; border-radius: 8px; border: 1px solid #333;}
+        .setting-group label { display: block; margin-bottom: 10px; font-size: 16px; }
+        input[type=range] { width: 100%; accent-color: #bb86fc; }
+        .val-display { float: right; color: #bb86fc; font-weight: bold; }
+        .btn { background: #bb86fc; color: #000; border: none; padding: 12px 20px; font-size: 16px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; transition: 0.2s; margin-bottom: 10px; }
+        .btn:hover { background: #9d4edd; }
+        .btn:active { transform: scale(0.98); }
+        .btn-test { background: #333; color: #fff; border: 1px solid #03dac6; }
+        .btn-test.active { background: #03dac6; color: #000; }
+        .btn-esp { background: #333; color: #fff; border: 1px solid #bb86fc; }
+        .btn-esp.active { background: #bb86fc; color: #000; }
         
-        .status-row { display: flex; justify-content: space-between; margin-top: 15px; font-size: 14px; align-items: center;}
-        .state-badge { background: rgba(255,255,255,0.1); padding: 6px 12px; border-radius: 12px; font-weight: bold; border: 1px solid var(--glass-border); }
-        .legend { font-size: 12px; margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
-        .leg-quadro { color: var(--accent); }
-        .leg-twohead { color: var(--accent-alt); }
-
-        /* Inputs & Controls */
-        label { display: block; margin-bottom: 8px; font-size: 14px; color: rgba(255,255,255,0.7); }
-        .val-display { float: right; color: var(--accent); font-weight: bold; }
-        
-        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; margin-bottom: 20px; }
-        input[type=range]:focus { outline: none; }
-        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 8px; border-radius: 10px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); }
-        input[type=range]::-webkit-slider-thumb { border: 2px solid var(--accent); height: 20px; width: 20px; border-radius: 50%; background: #1a1d2e; -webkit-appearance: none; margin-top: -7px; box-shadow: 0 0 10px rgba(0, 212, 255, 0.5);}
-
-        /* Glass Buttons */
-        .btn { 
-            background: rgba(255,255,255,0.05); 
-            color: #fff; 
-            border: 1px solid var(--glass-border); 
-            padding: 14px 20px; 
-            font-size: 16px; 
-            border-radius: 16px; 
-            width: 100%; 
-            margin-bottom: 12px;
-            font-weight: 600; 
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-        }
-        
-        .btn-esp.active { background: rgba(187, 134, 252, 0.2); border-color: var(--accent-alt); color: var(--accent-alt); }
-        .btn-test.active { background: rgba(0, 212, 255, 0.2); border-color: var(--accent); color: var(--accent); }
-        .btn-calib { background: rgba(0, 212, 255, 0.15); border-color: var(--accent); color: var(--accent); }
-
-        .hint-text { color: rgba(255,255,255,0.4); font-size: 11px; margin-top: -8px; margin-bottom: 15px; text-align: center; }
-
-        /* LIQUID GLASS BOTTOM NAV PILL - with Safe Area */
-        .nav-container {
-            position: fixed;
-            bottom: calc(20px + env(safe-area-inset-bottom, 0px));
-            left: 0;
-            width: 100%;
-            display: flex;
-            justify-content: center;
-            z-index: 100;
-        }
-
-        .nav-pill {
-            display: flex;
-            background: rgba(20, 20, 30, 0.8);
-            backdrop-filter: blur(24px);
-            -webkit-backdrop-filter: blur(24px);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            border-radius: 40px;
-            padding: 8px 12px;
-            gap: 10px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-        }
-
-        .nav-item {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            color: rgba(255,255,255,0.5);
-            padding: 8px 16px;
-            border-radius: 30px;
-            font-size: 11px;
-            font-weight: 500;
-            gap: 4px;
-        }
-
-        .nav-item.active {
-            background: rgba(0, 210, 255, 0.15);
-            color: var(--accent);
-            box-shadow: inset 0 0 10px rgba(0, 210, 255, 0.1);
-        }
+        .legend { display: flex; gap: 20px; margin-top: 10px; font-size: 14px;}
+        .leg-quadro { color: #03dac6; font-weight: bold; }
+        .leg-twohead { color: #bb86fc; font-weight: bold; }
     </style>
 </head>
 <body>
-
-    <div class="blob1"></div>
-    <div class="blob2"></div>
-
-    <div class="header">AMP <span>Controller</span></div>
-
+    <div class="sidebar">
+        <div class="logo">AMP</div>
+        <div class="menu-item active" onclick="switchTab('graphic')">Graphic</div>
+        <div class="menu-item" onclick="switchTab('devices')">Devices</div>
+        <div class="menu-item" onclick="switchTab('settings')">Settings</div>
+    </div>
     <div class="content">
         <div id="graphic" class="tab-content active">
-            <div class="glass-card">
-                <h2 id="modeTitle">Live EMG Signals</h2>
-                <canvas id="emgChart"></canvas>
-                
-                <div class="legend">
-                    <span class="leg-quadro">■ Quadriceps (Extend): <span id="valQ">0</span></span>
-                    <span class="leg-twohead">■ Biceps Fem. (Flex): <span id="valT">0</span></span>
-                </div>
-                
-                <div class="status-row">
-                    <span>Prosthesis State:</span>
-                    <span class="state-badge" id="motorState" style="color:var(--danger);">REST</span>
-                </div>
+            <h2 id="modeTitle">Live EMG Signals</h2>
+            <canvas id="emgChart"></canvas>
+            <div class="legend">
+                <span class="leg-quadro">■ Quadriceps (Extending): <span id="valQ">0</span></span>
+                <span class="leg-twohead">■ Biceps Fem. (Flexing): <span id="valT">0</span></span>
             </div>
+            <div class="status-bar">State: <span id="motorState" style="color:#cf6679;">REST (Fixed)</span></div>
         </div>
 
         <div id="devices" class="tab-content">
-            <div class="glass-card">
-                <h2>ESP-NOW Connection</h2>
-                <p style="font-size: 14px; color: rgba(255,255,255,0.7);">Receiver Status:</p>
-                <div class="state-badge" style="text-align:center; margin-bottom: 15px; padding: 12px; border-color: rgba(255,255,255,0.2);">
-                    <span id="rxStatus" style="color:var(--danger); font-size: 16px;">Searching...</span>
-                </div>
-                
-                <p style="font-size: 14px; color: rgba(255,255,255,0.7);">Receiver MAC Address:</p>
-                <div style="background: rgba(0,0,0,0.3); padding: 12px; border-radius: 12px; text-align: center; font-family: monospace; font-size: 16px; color: #fff;">
-                    <span id="rxMac">-</span>
-                </div>
+            <h2>ESP-NOW Devices</h2>
+            <div class="setting-group">
+                <p>Receiver Status: <span id="rxStatus" style="color:#cf6679; font-weight: bold;">Searching...</span></p>
+                <p>Receiver MAC: <span id="rxMac">-</span></p>
             </div>
         </div>
 
         <div id="settings" class="tab-content">
-            <div class="glass-card">
-                <h2>System Modes</h2>
+            <h2>Prosthesis Settings</h2>
+            
+            <div class="setting-group">
                 <button id="espNowBtn" class="btn btn-esp" onclick="toggleEspNow()">ESP-NOW: OFF</button>
-                <p class="hint-text">Sends signals to receiver via ESP-NOW instead of local servo.</p>
+                <p style="color: #aaa; font-size: 12px; margin-top: 5px;">When ON, local servo is disabled and signals are sent to the receiver via ESP-NOW.</p>
                 
-                <button id="testBtn" class="btn btn-test" onclick="toggleTestMode()">TEST MODE: OFF</button>
-                <p class="hint-text">Simulates muscle input without physical sensors.</p>
+                <button id="testBtn" class="btn btn-test" onclick="toggleTestMode()" style="margin-top: 10px;">TEST MODE: OFF</button>
+                <p style="color: #aaa; font-size: 12px; margin-top: 5px;">Simulates dual muscle input without needing the physical sensors.</p>
             </div>
 
-            <div class="glass-card">
-                <h2>Joint Angles (Degrees)</h2>
+            <div class="setting-group">
                 <label>Rest Angle <span id="restVal" class="val-display">90</span></label>
                 <input type="range" id="restAngle" min="0" max="180" step="1" value="90" oninput="updateSettings()">
                 
-                <label>Max Angle (Extend) <span id="maxVal" class="val-display">175</span></label>
+                <label style="margin-top:15px;">Max Angle (Extend) <span id="maxVal" class="val-display">175</span></label>
                 <input type="range" id="maxAngle" min="0" max="180" step="1" value="175" oninput="updateSettings()">
                 
-                <label>Min Angle (Flex) <span id="minVal" class="val-display">5</span></label>
+                <label style="margin-top:15px;">Min Angle (Flex) <span id="minVal" class="val-display">5</span></label>
                 <input type="range" id="minAngle" min="0" max="180" step="1" value="5" oninput="updateSettings()">
             </div>
 
-            <div class="glass-card">
-                <h2>Sensor Sensitivity</h2>
+            <div class="setting-group">
                 <label>Gain Multiplier <span id="gainVal" class="val-display">1.0</span></label>
                 <input type="range" id="gain" min="0.1" max="5.0" step="0.1" value="1.0" oninput="updateSettings()">
                 
-                <label>Activation Threshold <span id="threshVal" class="val-display">1500</span></label>
+                <label style="margin-top:15px;">Activation Threshold <span id="threshVal" class="val-display">1500</span></label>
                 <input type="range" id="threshold" min="50" max="3000" step="10" value="1500" oninput="updateSettings()">
             </div>
 
-            <div class="glass-card" style="border-color: rgba(0, 212, 255, 0.3);">
-                <button class="btn btn-calib" onclick="calibrate()">Run Smart Calibration</button>
-            </div>
-        </div>
-    </div>
-
-    <div class="nav-container">
-        <div class="nav-pill">
-            <div class="nav-item active" onclick="switchTab('graphic', this)">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
-                <span>Graphic</span>
-            </div>
-            <div class="nav-item" onclick="switchTab('devices', this)">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
-                <span>Devices</span>
-            </div>
-            <div class="nav-item" onclick="switchTab('settings', this)">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                <span>Settings</span>
+            <div class="setting-group">
+                <button class="btn" onclick="calibrate()">Run Calibration</button>
             </div>
         </div>
     </div>
 
     <script>
-        function switchTab(tabId, element) {
-            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+        function switchTab(tabId) {
+            document.querySelectorAll('.menu-item').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-            element.classList.add('active');
+            event.target.classList.add('active');
             document.getElementById(tabId).classList.add('active');
-            if (tabId === 'graphic') drawGraph();
         }
 
         var gateway = `ws://${window.location.hostname}/ws`;
@@ -284,24 +120,21 @@
             if(data.type === "data") {
                 document.getElementById('valQ').innerText = data.emgQ;
                 document.getElementById('valT').innerText = data.emgT;
+                document.getElementById('motorState').innerText = data.state;
                 
-                let stateEl = document.getElementById('motorState');
-                stateEl.innerText = data.state;
-                
-                if(data.state === "EXTENDING") stateEl.style.color = "var(--accent)";
-                else if(data.state === "FLEXING") stateEl.style.color = "var(--accent-alt)";
-                else stateEl.style.color = "var(--danger)";
+                if(data.state === "EXTENDING") document.getElementById('motorState').style.color = "#03dac6";
+                else if(data.state === "FLEXING") document.getElementById('motorState').style.color = "#bb86fc";
+                else document.getElementById('motorState').style.color = "#cf6679";
                 
                 addData(data.emgQ, data.emgT, data.threshold);
                 
-                let rxStatusEl = document.getElementById('rxStatus');
                 if (data.rxStatus === "Connected") {
-                    rxStatusEl.innerText = "Connected";
-                    rxStatusEl.style.color = "var(--accent)";
+                    document.getElementById('rxStatus').innerText = "Connected";
+                    document.getElementById('rxStatus').style.color = "#03dac6";
                     document.getElementById('rxMac').innerText = data.rxMac;
                 } else {
-                    rxStatusEl.innerText = "Searching...";
-                    rxStatusEl.style.color = "var(--danger)";
+                    document.getElementById('rxStatus').innerText = "Searching...";
+                    document.getElementById('rxStatus').style.color = "#cf6679";
                     document.getElementById('rxMac').innerText = "-";
                 }
             } else if (data.type === "calib_done") {
@@ -374,11 +207,7 @@
         let dataPointsT = new Array(100).fill(0);
         let currentThreshold = 1500;
 
-        function initGraph() { 
-            canvas.width = canvas.parentElement.clientWidth - 2; 
-            canvas.height = 250; 
-            drawGraph(); 
-        }
+        function initGraph() { canvas.width = canvas.parentElement.clientWidth; canvas.height = 400; drawGraph(); }
         
         function addData(valQ, valT, thresh) { 
             dataPointsQ.push(valQ); dataPointsQ.shift(); 
@@ -389,31 +218,17 @@
 
         function drawGraph() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            ctx.strokeStyle = 'rgba(255,255,255,0.1)'; 
-            ctx.beginPath();
-            for(let i=0; i<5; i++) { 
-                let y = (canvas.height / 4) * i; 
-                ctx.moveTo(0, y); 
-                ctx.lineTo(canvas.width, y); 
-            }
+            ctx.strokeStyle = '#333'; ctx.beginPath();
+            for(let i=0; i<5; i++) { let y = (canvas.height / 4) * i; ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); }
             ctx.stroke();
 
             let maxGraphVal = 4000;
             let threshY = canvas.height - (currentThreshold / maxGraphVal) * canvas.height;
-            
-            ctx.strokeStyle = 'rgba(207, 102, 121, 0.6)'; 
-            ctx.lineWidth = 2; 
-            ctx.setLineDash([5, 5]);
-            ctx.beginPath(); 
-            ctx.moveTo(0, threshY); 
-            ctx.lineTo(canvas.width, threshY); 
-            ctx.stroke();
+            ctx.strokeStyle = 'rgba(207, 102, 121, 0.5)'; ctx.lineWidth = 2; ctx.setLineDash([5, 5]);
+            ctx.beginPath(); ctx.moveTo(0, threshY); ctx.lineTo(canvas.width, threshY); ctx.stroke();
             ctx.setLineDash([]);
 
-            ctx.strokeStyle = '#00d2ff'; 
-            ctx.lineWidth = 3; 
-            ctx.beginPath();
+            ctx.strokeStyle = '#03dac6'; ctx.lineWidth = 3; ctx.beginPath();
             for (let i = 0; i < dataPointsQ.length; i++) {
                 let x = (i / (dataPointsQ.length - 1)) * canvas.width;
                 let y = canvas.height - (dataPointsQ[i] / maxGraphVal) * canvas.height;
@@ -421,9 +236,7 @@
             }
             ctx.stroke();
 
-            ctx.strokeStyle = '#bb86fc'; 
-            ctx.lineWidth = 3; 
-            ctx.beginPath();
+            ctx.strokeStyle = '#bb86fc'; ctx.lineWidth = 3; ctx.beginPath();
             for (let i = 0; i < dataPointsT.length; i++) {
                 let x = (i / (dataPointsT.length - 1)) * canvas.width;
                 let y = canvas.height - (dataPointsT[i] / maxGraphVal) * canvas.height;
@@ -431,7 +244,7 @@
             }
             ctx.stroke();
         }
-        window.onresize = () => { initGraph(); };
+        window.onresize = () => { canvas.width = canvas.parentElement.clientWidth; drawGraph(); };
     </script>
 </body>
 </html>
